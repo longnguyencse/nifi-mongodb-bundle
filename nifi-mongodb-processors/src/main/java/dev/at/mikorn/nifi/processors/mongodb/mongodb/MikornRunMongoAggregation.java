@@ -23,6 +23,8 @@ import com.mongodb.BasicDBObject;
 import com.mongodb.client.AggregateIterable;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoCursor;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.apache.nifi.annotation.behavior.EventDriven;
 import org.apache.nifi.annotation.behavior.InputRequirement;
 import org.apache.nifi.annotation.documentation.CapabilityDescription;
@@ -35,6 +37,7 @@ import org.apache.nifi.processor.ProcessContext;
 import org.apache.nifi.processor.ProcessSession;
 import org.apache.nifi.processor.Relationship;
 import org.apache.nifi.processor.exception.ProcessException;
+import org.apache.nifi.processor.util.StandardValidators;
 import org.bson.conversions.Bson;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -52,6 +55,7 @@ import java.util.Set;
 @InputRequirement(InputRequirement.Requirement.INPUT_ALLOWED)
 @EventDriven
 public class MikornRunMongoAggregation extends AbstractMongoProcessor {
+    private final static Logger logger = LogManager.getLogger(MikornRunMongoAggregation.class);
 
     private final static Set<Relationship> relationships;
     private final static List<PropertyDescriptor> propertyDescriptors;
@@ -67,6 +71,13 @@ public class MikornRunMongoAggregation extends AbstractMongoProcessor {
     static final Relationship REL_RESULTS = new Relationship.Builder()
             .description("The result set of the aggregation will be sent to this relationship.")
             .name("results")
+            .build();
+
+    protected static final PropertyDescriptor PLAINT_QUERY = new PropertyDescriptor.Builder()
+            .name("Plaint query")
+            .description("Plaint query")
+            .required(true)
+            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
             .build();
 
     static final List<Bson> buildAggregationQuery(String query) throws IOException {
@@ -106,7 +117,7 @@ public class MikornRunMongoAggregation extends AbstractMongoProcessor {
             .expressionLanguageSupported(true)
             .description("The aggregation query to be executed.")
             .required(true)
-//            .addValidator(AGG_VALIDATOR)
+            .addValidator(AGG_VALIDATOR)
             .build();
 
     static {
@@ -119,6 +130,7 @@ public class MikornRunMongoAggregation extends AbstractMongoProcessor {
         _propertyDescriptors.add(RESULTS_PER_FLOWFILE);
         _propertyDescriptors.add(SSL_CONTEXT_SERVICE);
         _propertyDescriptors.add(CLIENT_AUTH);
+        _propertyDescriptors.add(PLAINT_QUERY);
         propertyDescriptors = Collections.unmodifiableList(_propertyDescriptors);
 
         final Set<Relationship> _relationships = new HashSet<>();
@@ -153,330 +165,6 @@ public class MikornRunMongoAggregation extends AbstractMongoProcessor {
     @Override
     public void onTrigger(ProcessContext context, ProcessSession session) throws ProcessException {
         FlowFile flowFile = null;
-        String lastTime = flowFile.getAttribute("last_time");
-        String query1 = String.format("[\n" +
-                "{\n" +
-                "\t\"$project\": {\n" +
-                "\t\t\"_id\": 1,\n" +
-                "\t\t\"task_name\": 1,\n" +
-                "\t\t\"task_desc\": 1,\n" +
-                "\t\t\"project\": 1,\n" +
-                "\t\t\"assigner\": 1,\n" +
-                "\t\t\"status\": 1,\n" +
-                "\t\t\"assigned_on\": 1,\n" +
-                "\t\t\"resources\": 1,\n" +
-                "\t\t\"annotation_type\": 1,\n" +
-                "\t\t\"start_on\":1,\n" +
-                "\t\t\"finish_on\": 1,\n" +
-                "\t\t\"real_start_time\": 1,\n" +
-                "        \"real_completed_time\": 1,\n" +
-                "\t\t\"files\": {\n" +
-                "\t\t\t\"$filter\": {\n" +
-                "\t\t\t\t\"input\": \"$files\",\n" +
-                "\t\t\t\t\"as\": \"file\",\n" +
-                "\t\t\t\t\"cond\": {\n" +
-                "\t\t\t\t\t\"$gte\": [\"$$file.last_modified_on\", {\n" +
-                "\t\t\t\t\t\t\"$dateFromString\": {\n" +
-                "\t\t\t\t\t\t\t\"dateString\": \"%s\"\n" +
-                "\t\t\t\t\t\t}\n" +
-                "\t\t\t\t\t}]\n" +
-                "\t\t\t\t}\n" +
-                "\t\t\t}\n" +
-                "\t\t}\n" +
-                "\t}\n" +
-                "},\n" +
-                "    {\n" +
-                "        \"$lookup\": {\n" +
-                "            \"from\": \"projects\",\n" +
-                "            \"localField\": \"project._id\",\n" +
-                "            \"foreignField\": \"_id\",\n" +
-                "            \"as\": \"project\"\n" +
-                "\n" +
-                "        }\n" +
-                "    },\n" +
-                "    {\n" +
-                "        \"$unwind\": \"$project\"\n" +
-                "    },\n" +
-                "\n" +
-                "    {\n" +
-                "        \"$unwind\": \"$files\"\n" +
-                "    },\n" +
-                "    {\n" +
-                "        \"$replaceRoot\": {\n" +
-                "            \"newRoot\": {\n" +
-                "                \"$mergeObjects\": [\"$files\", \"$$ROOT\"]\n" +
-                "            }\n" +
-                "        }\n" +
-                "    },\n" +
-                "    {\n" +
-                "        \"$project\": {\n" +
-                "            \"_id\": {\n" +
-                "                \"$concat\": [\"$project._id\", \"$_id\", \"$files.file_id\"]\n" +
-                "            },\n" +
-                "            \"project\": {\n" +
-                "                \"_id\": \"$project._id\",\n" +
-                "                \"project_name\": \"$project.project_name\",\n" +
-                "                \"project_desc\": \"$project.project_desc\",\n" +
-                "                \"project_type\": \"$project.project_type\",\n" +
-                "                \"client_name\": \"$project.client_name\",\n" +
-                "                \"status\": \"$project.status\",\n" +
-                "                \"start_on\": \"$project.start_on\",\n" +
-                "                \"finish_on\": \"$project.finish_on\"\n" +
-                "\n" +
-                "            },\n" +
-                "            \"task\": {\n" +
-                "                \"_id\": \"$_id\",\n" +
-                "                \"task_name\": \"$task_name\",\n" +
-                "                \"status\": \"$status\",\n" +
-                "                \"assigner\": \"$assigner\",\n" +
-                "                \"assigned_on\": \"$assigned_on\",\n" +
-                "                \"annotation_type\": \"$annotation_type\",\n" +
-                "                \"start_on\": \"$start_on\",\n" +
-                "                \"finish_on\": \"$finish_on\",\n" +
-                "                \"real_start_time\": \"$real_start_time\",\n" +
-                "                \"real_completed_time\":\"$real_completed_time\"\n" +
-                "            },\n" +
-                "            \"filed_id\": 1,\n" +
-                "            \"file_name\": \"$file_patch_name\",\n" +
-                "            \"file_size\": \"$file_patch_size_mb\",\n" +
-                "            \"working_version\": 1,\n" +
-                "            \"status\": 1,\n" +
-                "            \"received_on\": 1,\n" +
-                "            \"total_unit\": 1,\n" +
-                "            \"report_fields\": 1,\n" +
-                "            \"actual_start_annotate\": 1,\n" +
-                "            \"actual_complete_annotate\": 1,\n" +
-                "            \"actual_start_check\": 1,\n" +
-                "            \"actual_complete_check\": 1,\n" +
-                "            \"actual_completed\": 1,\n" +
-                "            \"annotate_duration\": 1,\n" +
-                "            \"check_duration\": 1\n" +
-                "        }\n" +
-                "    }\n" +
-                "]", lastTime);
-
-        String query4 = String.format("[{\n" +
-                "        \"$addFields\": {\n" +
-                "            \"filter_cond\": {\n" +
-                "                \"$dateFromString\": {\n" +
-                "                    \"dateString\": \"%s\"\n" +
-                "                }\n" +
-                "            }\n" +
-                "        }\n" +
-                "\n" +
-                "    },\n" +
-                "    {\n" +
-                "        \"$unwind\": \"$files\"\n" +
-                "    },\n" +
-                "    {\n" +
-                "        \"$project\": {\n" +
-                "            \"_id\": 1,\n" +
-                "            \"task_name\": 1,\n" +
-                "            \"project\": 1,\n" +
-                "            \"annotation_type\": 1,\n" +
-                "            \"file_id\": \"$files.file_id\",\n" +
-                "            \"file_name\": \"$files.file_patch_name\",\n" +
-                "            \"working_version\": \"$files.working_version\",\n" +
-                "            \"file_size\": \"$files.file_patch_size_mb\",\n" +
-                "            \"total_unit\": \"$files.total_unit\",\n" +
-                "                        \"filter_cond\": 1,\n" +
-                "            \"tickets\": {\n" +
-                "                \"$filter\": {\n" +
-                "                    \"input\": \"$files.tickets\",\n" +
-                "                    \"as\": \"ticket\",\n" +
-                "                    \"cond\": {\n" +
-                "                        \"$or\": [{\n" +
-                "                                \"$gte\": [\"$$ticket.last_annotating\", \"$filter_cond\"]\n" +
-                "                            },\n" +
-                "                            {\n" +
-                "                                \"$gte\": [\"$$ticket.last_checking\", \"$filter_cond\"]\n" +
-                "                            }\n" +
-                "                        ]\n" +
-                "                    }\n" +
-                "                }\n" +
-                "            }\n" +
-                "        }\n" +
-                "    },\n" +
-                "    \n" +
-                "       {\n" +
-                "            \"$lookup\": {\n" +
-                "                \"from\": \"projects\",\n" +
-                "                \"localField\": \"project._id\",\n" +
-                "                \"foreignField\": \"_id\",\n" +
-                "                \"as\": \"project\"\n" +
-                "\n" +
-                "            }\n" +
-                "        },\n" +
-                "        {\n" +
-                "            \"$unwind\": \"$project\"\n" +
-                "        },\n" +
-                "        {\n" +
-                "            \"$unwind\": \"$tickets\"\n" +
-                "        },\n" +
-                "     {\n" +
-                "            \"$addFields\": {\n" +
-                "                \"date\": {\n" +
-                "                    \"$dateFromParts\": {\n" +
-                "                        \"year\": {\n" +
-                "                            \"$year\": \"$filter_cond\"\n" +
-                "                        },\n" +
-                "                        \"month\": {\n" +
-                "                            \"$month\": \"$filter_cond\"\n" +
-                "                        },\n" +
-                "                        \"day\": {\n" +
-                "                            \"$dayOfMonth\": \"$filter_cond\"\n" +
-                "                        }\n" +
-                "                    }\n" +
-                "                }\n" +
-                "            }\n" +
-                "\n" +
-                "        },\n" +
-                "      {\n" +
-                "          \"$project\": {\n" +
-                "              \"task._id\": \"$_id\",\n" +
-                "              \"task.task_name\": \"$task_name\",\n" +
-                "              \"task.annotation_type\": \"$annotation_type\",\n" +
-                "              \"project._id\": 1,\n" +
-                "              \"project.project_name\": 1,\n" +
-                "              \"project.project_type\": 1,\n" +
-                "              \"project.client_name\": 1,\n" +
-                "              \"file_id\": 1,\n" +
-                "              \"file_name\": 1,\n" +
-                "              \"working_version\": 1,\n" +
-                "              \"file_size\": 1,\n" +
-                "              \"total_unit\": 1,\n" +
-                "              \"ticket_id\": \"$tickets.ticket_id\",\n" +
-                "              \"round\": \"$tickets.round\",\n" +
-                "              \"level\": \"$tickets.level\",\n" +
-                "              \"priority_level\": \"$tickets.priority_level\",\n" +
-                "                  \"date\": \"$date\",\n" +
-                "              \"tmp\": [{\n" +
-                "                      \"action_type\": \"annotating\",\n" +
-                "                      \"user\": \"$tickets.annotator\",\n" +
-                "                      \"events\": {\n" +
-                "                          \"$filter\": {\n" +
-                "                              \"input\": \"$tickets.annotate_events\",\n" +
-                "                              \"as\": \"item\",\n" +
-                "                              \"cond\": {\n" +
-                "                                  \"$gte\": [\"$$item.start_annotating\", \"$date\"]\n" +
-                "                              }\n" +
-                "                          }\n" +
-                "                      }\n" +
-                "                  },\n" +
-                "                  {\n" +
-                "                      \"action_type\": \"checking\",\n" +
-                "                      \"user\": \"$tickets.checker\",\n" +
-                "                      \"events\": {\n" +
-                "                          \"$filter\": {\n" +
-                "                              \"input\": \"$tickets.check_events\",\n" +
-                "                              \"as\": \"item\",\n" +
-                "                              \"cond\": {\n" +
-                "                                  \"$gte\": [\"$$item.start_checking\", \"$date\"]\n" +
-                "                              }\n" +
-                "                          }\n" +
-                "                      }\n" +
-                "                  }\n" +
-                "              ]\n" +
-                "          }\n" +
-                "      },\n" +
-                "      {\n" +
-                "          \"$unwind\": \"$tmp\"\n" +
-                "      },\n" +
-                "     {\n" +
-                "          \"$unwind\": \"$tmp.events\"\n" +
-                "      },\n" +
-                "\n" +
-                " {\n" +
-                "          \"$group\": {\n" +
-                "              \"_id\": {\n" +
-                "                  \"_id\": \"$_id\",\n" +
-                "                  \"project\": \"$project\",\n" +
-                "                  \"task\": \"$task\",\n" +
-                "                  \"file_id\": \"$file_id\",\n" +
-                "                  \"file_name\": \"$file_name\",\n" +
-                "                  \"file_size\": \"$file_size\",\n" +
-                "                  \"ticket_id\":  \"$ticket_id\",\n" +
-                "                  \"round\":\"$round\",\n" +
-                "                  \"level\":  \"$level\",\n" +
-                "                  \"priority_level\":  \"$priority_level\",\n" +
-                "                  \"action_type\": \"$tmp.action_type\",\n" +
-                "                  \"user\": \"$tmp.user\",\n" +
-                "                  \"date\": {\n" +
-                "                      \"$cond\": [{\n" +
-                "                             \"$eq\": [\"$tmp.action_type\",\"annotating\" ]\n" +
-                "                          }, {\n" +
-                "                              \"$dateFromParts\": {\n" +
-                "                                  \"year\": {\n" +
-                "                                      \"$year\": \"$tmp.events.start_annotating\"\n" +
-                "                                  },\n" +
-                "                                  \"month\": {\n" +
-                "                                      \"$month\": \"$tmp.events.start_annotating\"\n" +
-                "                                  },\n" +
-                "                                  \"day\": {\n" +
-                "                                      \"$dayOfMonth\": \"$tmp.events.start_annotating\"\n" +
-                "                                  }\n" +
-                "                              }\n" +
-                "                          },\n" +
-                "                          {\n" +
-                "                              \"$dateFromParts\":\n" +
-                "                              {\n" +
-                "                                  \"year\": {\n" +
-                "                                      \"$year\": \"$tmp.events.start_checking\"\n" +
-                "                                  },\n" +
-                "                                  \"month\": {\n" +
-                "                                      \"$month\": \"$tmp.events.start_checking\"\n" +
-                "                                  },\n" +
-                "                                  \"day\": {\n" +
-                "                                      \"$dayOfMonth\": \"$tmp.events.start_checking\"\n" +
-                "                                  }\n" +
-                "                              }\n" +
-                "                          }\n" +
-                "                      ]\n" +
-                "                  }\n" +
-                "              },\n" +
-                "              \"duration\": {\n" +
-                "                  \"$sum\": \"$tmp.events.duration\"\n" +
-                "              },\n" +
-                "              \"completed_unit\": {\n" +
-                "                  \"$sum\": \"$tmp.events.completed_unit\"\n" +
-                "              }\n" +
-                "          }\n" +
-                "      },\n" +
-                "     {\n" +
-                "          \"$project\": {\n" +
-                "              \"_id\": {\n" +
-                "                  \"$concat\": [\"$_id.project._id\", \"-\", \"$_id.task._id\", \"-\",\n" +
-                "                      {\n" +
-                "                          \"$substr\": [\"$_id.ticket_id\", 0, 4]\n" +
-                "                      }, \"-\",\n" +
-                "                      {\n" +
-                "                          \"$substr\": [\"$_id.round\", 0, 4]\n" +
-                "                      }, \"-\", \"$_id.user._id\", \"-\",\n" +
-                "                      {\n" +
-                "                          \"$dateToString\": {\n" +
-                "                              \"date\": \"$_id.date\"\n" +
-                "                          }\n" +
-                "                      }\n" +
-                "                  ]\n" +
-                "              },\n" +
-                "              \"project\": \"$_id.project\",\n" +
-                "              \"task\": \"$_id.task\",\n" +
-                "              \"file_id\": \"$_id.file_id\",\n" +
-                "              \"file_name\": \"$_id.file_name\",\n" +
-                "              \"file_size\": \"$_id.file_size\",\n" +
-                "              \"ticket_id\": \"$_id.ticket_id\",\n" +
-                "              \"round\": \"$_id.round\",\n" +
-                "              \"level\": \"$_id.level\",\n" +
-                "              \"priority_level\": \"$_id.priority_level\",\n" +
-                "              \"action_type\": \"$_id.action_type\",\n" +
-                "              \"user\": \"$_id.user\",\n" +
-                "              \"@date\": \"$_id.date\",\n" +
-                "              \"duration\": 1,\n" +
-                "              \"completed_unit\": 1\n" +
-                "          }\n" +
-                "      }\n" +
-                "]" , lastTime);
-
 
         if (context.hasIncomingConnection()) {
             flowFile = session.get();
@@ -489,26 +177,27 @@ public class MikornRunMongoAggregation extends AbstractMongoProcessor {
         String query = context.getProperty(QUERY).evaluateAttributeExpressions(flowFile).getValue();
         String queryAttr = context.getProperty(QUERY_ATTRIBUTE).evaluateAttributeExpressions(flowFile).getValue();
         Integer batchSize = context.getProperty(BATCH_SIZE).asInteger();
+        String plaintQuery = context.getProperty(PLAINT_QUERY).getValue();
+        String lastTime = flowFile.getAttribute("last_time");
+
         Integer resultsPerFlowfile = context.getProperty(RESULTS_PER_FLOWFILE).asInteger();
+
+        logger.info(String.format("Last tiem: %s \n Query: %s",lastTime, query));
 
         Map attrs = new HashMap();
         if (queryAttr != null && queryAttr.trim().length() > 0) {
             attrs.put(queryAttr, query);
         }
 
-        MongoCollection collection = getCollection(context);
+
         MongoCursor iter = null;
+        String queryAggregation = String.format(plaintQuery, lastTime);
+        queryAggregation = queryAggregation.replace("%%", "%");
+        logger.info(String.format("Query offical: %s", queryAggregation));
 
         try {
-            List<Bson> aggQuery = new ArrayList<>();
-            if (query.equalsIgnoreCase("[{\"query\":\"1\"}]")) {
-                aggQuery = buildAggregationQuery(query1);
-            } else if( query.equalsIgnoreCase("[{\"query\":\"2\"}]")) {
-                aggQuery = buildAggregationQuery(query4);
-            } else {
-                aggQuery = buildAggregationQuery(query);
-            }
-
+            MongoCollection collection = getCollection(context);
+            List<Bson> aggQuery = buildAggregationQuery(queryAggregation);
             AggregateIterable it = collection.aggregate(aggQuery);
             it.batchSize(batchSize != null ? batchSize : 1);
 

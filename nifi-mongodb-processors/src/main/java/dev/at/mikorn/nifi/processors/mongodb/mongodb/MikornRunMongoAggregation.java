@@ -130,7 +130,7 @@ public class MikornRunMongoAggregation extends AbstractMongoProcessor {
         _propertyDescriptors.add(RESULTS_PER_FLOWFILE);
         _propertyDescriptors.add(SSL_CONTEXT_SERVICE);
         _propertyDescriptors.add(CLIENT_AUTH);
-        _propertyDescriptors.add(PLAINT_QUERY);
+//        _propertyDescriptors.add(PLAINT_QUERY);
         propertyDescriptors = Collections.unmodifiableList(_propertyDescriptors);
 
         final Set<Relationship> _relationships = new HashSet<>();
@@ -177,12 +177,12 @@ public class MikornRunMongoAggregation extends AbstractMongoProcessor {
         String query = context.getProperty(QUERY).evaluateAttributeExpressions(flowFile).getValue();
         String queryAttr = context.getProperty(QUERY_ATTRIBUTE).evaluateAttributeExpressions(flowFile).getValue();
         Integer batchSize = context.getProperty(BATCH_SIZE).asInteger();
-        String plaintQuery = context.getProperty(PLAINT_QUERY).getValue();
-        String lastTime = flowFile.getAttribute("last_time");
+//        String plaintQuery = context.getProperty(PLAINT_QUERY).getValue();
+//        String lastTime = flowFile.getAttribute("last_time");
 
         Integer resultsPerFlowfile = context.getProperty(RESULTS_PER_FLOWFILE).asInteger();
 
-        logger.info(String.format("Last tiem: %s \n Query: %s",lastTime, query));
+//        logger.info(String.format("Last tiem: %s \n Query: %s",lastTime, query));
 
         Map attrs = new HashMap();
         if (queryAttr != null && queryAttr.trim().length() > 0) {
@@ -191,13 +191,14 @@ public class MikornRunMongoAggregation extends AbstractMongoProcessor {
 
 
         MongoCursor iter = null;
-        String queryAggregation = String.format(plaintQuery, lastTime);
-        queryAggregation = queryAggregation.replace("%%", "%");
-        logger.info(String.format("Query offical: %s", queryAggregation));
+//        String queryAggregation = String.format(plaintQuery, lastTime);
+//        queryAggregation = queryAggregation.replace("%%", "%");
+//        logger.info(String.format("Query offical: %s", queryAggregation));
+        query = query.replace("#", "$");
 
         try {
             MongoCollection collection = getCollection(context);
-            List<Bson> aggQuery = buildAggregationQuery(queryAggregation);
+            List<Bson> aggQuery = buildAggregationQuery(query);
             AggregateIterable it = collection.aggregate(aggQuery);
             it.batchSize(batchSize != null ? batchSize : 1);
 
